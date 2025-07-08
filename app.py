@@ -23,7 +23,13 @@ def home():
 def listar_producoes():
     conexao = conectar()
     cursor = conexao.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM producao ORDER BY criado_em DESC")
+
+    cursor.execute("""
+        SELECT id, produto, tamanho, erp_id, status, criado_em
+        FROM producao
+        ORDER BY criado_em DESC
+    """)
+
     dados = cursor.fetchall()
     cursor.close()
     conexao.close()
