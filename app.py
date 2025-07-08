@@ -1,24 +1,25 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import mysql.connector
+from mysql.connector.pooling import MySQLConnectionPool
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Ativa CORS para todas as rotas
+CORS(app)
 
-# Conexão com o banco de dados
-def conectar():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME")
-    )
+# Configuração do pool de conexões
+config = {
+    "host": os.getenv("DB_HOST"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME")
+}
 
-# Rota inicial de teste
+pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=10, **config)
+
+# Rota de teste
 @app.route('/')
 def home():
     return 'API conectada à Hostinger!'
@@ -26,19 +27,21 @@ def home():
 # Rota GET: listar produções
 @app.route('/producoes', methods=['GET'])
 def listar_producoes():
-    conexao = conectar()
-    cursor = conexao.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT id, produto, tamanho, erp_id, status, criado_em
-        FROM producao
-        ORDER BY criado_em DESC
-    """)
-    
-    dados = cursor.fetchall()
-    cursor.close()
-    conexao.close()
-    return jsonify(dados)
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, produto, tamanho, erp_id, status, criado_em
+            FROM producao
+            ORDER BY criado_em DESC
+        """)
+        dados = cursor.fetchall()
+        return jsonify(dados)
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 # Rota POST: adicionar nova produção
 @app.route('/producoes', methods=['POST'])
@@ -52,19 +55,20 @@ def adicionar_producao():
     if not all([produto, tamanho, erp_id, status]):
         return jsonify({"erro": "Campos obrigatórios ausentes."}), 400
 
-    conexao = conectar()
-    cursor = conexao.cursor()
-
-    cursor.execute("""
-        INSERT INTO producao (produto, tamanho, erp_id, status)
-        VALUES (%s, %s, %s, %s)
-    """, (produto, tamanho, erp_id, status))
-
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-
-    return jsonify({"mensagem": "Produção adicionada com sucesso!"}), 201
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO producao (produto, tamanho, erp_id, status)
+            VALUES (%s, %s, %s, %s)
+        """, (produto, tamanho, erp_id, status))
+        conn.commit()
+        return jsonify({"mensagem": "Produção adicionada com sucesso!"}), 201
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 # Rota PUT: atualizar status da produção
 @app.route('/producoes/<int:id>', methods=['PUT'])
@@ -75,15 +79,17 @@ def atualizar_status(id):
     if not novo_status:
         return jsonify({"erro": "Status ausente."}), 400
 
-    conexao = conectar()
-    cursor = conexao.cursor()
-
-    cursor.execute("UPDATE producao SET status = %s WHERE id = %s", (novo_status, id))
-    conexao.commit()
-    cursor.close()
-    conexao.close()
-
-    return jsonify({"mensagem": "Status atualizado com sucesso!"})
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE producao SET status = %s WHERE id = %s", (novo_status, id))
+        conn.commit()
+        return jsonify({"mensagem": "Status atualizado com sucesso!"})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 # Iniciar servidor
 if __name__ == "__main__":
