@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request
-from flask_cors import CORS  # <- ADICIONE ESTA LINHA
+from flask_cors import CORS
 import mysql.connector
 import os
 from dotenv import load_dotenv
@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # <- ATIVA O CORS PARA TODAS AS ROTAS E ORIGENS
+CORS(app)  # Ativa CORS para todas as rotas
 
 # Conexão com o banco de dados
 def conectar():
@@ -65,6 +65,25 @@ def adicionar_producao():
     conexao.close()
 
     return jsonify({"mensagem": "Produção adicionada com sucesso!"}), 201
+
+# Rota PUT: atualizar status da produção
+@app.route('/producoes/<int:id>', methods=['PUT'])
+def atualizar_status(id):
+    dados = request.json
+    novo_status = dados.get('status')
+
+    if not novo_status:
+        return jsonify({"erro": "Status ausente."}), 400
+
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    cursor.execute("UPDATE producao SET status = %s WHERE id = %s", (novo_status, id))
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+
+    return jsonify({"mensagem": "Status atualizado com sucesso!"})
 
 # Iniciar servidor
 if __name__ == "__main__":
