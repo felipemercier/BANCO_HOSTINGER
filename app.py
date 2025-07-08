@@ -25,14 +25,14 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=10, **config)
 def home():
     return 'API conectada à Hostinger!'
 
-# Rota GET: listar produções (apenas finalizados do dia atual)
+# Rota GET: listar produções (exibir finalizados apenas do dia)
 @app.route('/producoes', methods=['GET'])
 def listar_producoes():
     try:
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT id, produto, tamanho, erp_id, status, criado_em, data_construcao
+            SELECT id, produto, tamanho, erp_id, status, criado_em, data_construcao, data_finalizado
             FROM producao
             WHERE status != 'finalizado'
                OR DATE(criado_em) = CURDATE()
@@ -73,7 +73,7 @@ def adicionar_producao():
         cursor.close()
         conn.close()
 
-# Rota PUT: atualizar status da produção (com registro de data_construcao)
+# Rota PUT: atualizar status da produção (com datas automáticas)
 @app.route('/producoes/<int:id>', methods=['PUT'])
 def atualizar_status(id):
     dados = request.json
@@ -92,6 +92,14 @@ def atualizar_status(id):
                 SET status = %s, data_construcao = NOW()
                 WHERE id = %s
             """, (novo_status, id))
+
+        elif novo_status == 'finalizado':
+            cursor.execute("""
+                UPDATE producao 
+                SET status = %s, data_finalizado = NOW()
+                WHERE id = %s
+            """, (novo_status, id))
+
         else:
             cursor.execute("""
                 UPDATE producao 
@@ -111,3 +119,4 @@ def atualizar_status(id):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
