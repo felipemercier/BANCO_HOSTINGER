@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS  # <- ADICIONE ESTA LINHA
 import mysql.connector
 import os
 from dotenv import load_dotenv
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)  # <- ATIVA O CORS PARA TODAS AS ROTAS E ORIGENS
 
 # Conexão com o banco de dados
 def conectar():
