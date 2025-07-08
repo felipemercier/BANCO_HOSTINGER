@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 
@@ -31,7 +32,7 @@ def listar_producoes():
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT id, produto, tamanho, erp_id, status, criado_em
+            SELECT id, produto, tamanho, erp_id, status, criado_em, data_construcao
             FROM producao
             ORDER BY criado_em DESC
         """)
@@ -82,7 +83,20 @@ def atualizar_status(id):
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE producao SET status = %s WHERE id = %s", (novo_status, id))
+
+        if novo_status == "construcao":
+            cursor.execute("""
+                UPDATE producao
+                SET status = %s, data_construcao = %s
+                WHERE id = %s
+            """, (novo_status, datetime.now(), id))
+        else:
+            cursor.execute("""
+                UPDATE producao
+                SET status = %s
+                WHERE id = %s
+            """, (novo_status, id))
+
         conn.commit()
         return jsonify({"mensagem": "Status atualizado com sucesso!"})
     except Exception as e:
