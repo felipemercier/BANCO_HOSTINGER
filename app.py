@@ -32,7 +32,8 @@ def listar_producoes():
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT id, produto, tamanho, erp_id, status, criado_em, data_construcao, data_finalizado
+            SELECT id, produto, tamanho, erp_id, status, criado_em, 
+                   data_construcao, data_finalizado, data_fila, data_on_demand
             FROM producao
             WHERE status != 'finalizado'
                OR DATE(criado_em) = CURDATE()
@@ -100,6 +101,20 @@ def atualizar_status(id):
                 WHERE id = %s
             """, (novo_status, id))
 
+        elif novo_status == 'fila':
+            cursor.execute("""
+                UPDATE producao 
+                SET status = %s, data_fila = NOW()
+                WHERE id = %s
+            """, (novo_status, id))
+
+        elif novo_status == 'on_demand':
+            cursor.execute("""
+                UPDATE producao 
+                SET status = %s, data_on_demand = NOW()
+                WHERE id = %s
+            """, (novo_status, id))
+
         else:
             cursor.execute("""
                 UPDATE producao 
@@ -119,4 +134,3 @@ def atualizar_status(id):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
