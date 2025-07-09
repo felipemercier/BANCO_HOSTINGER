@@ -77,7 +77,7 @@ def producoes():
     try:
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM producoes")
+        cursor.execute("SELECT * FROM producao")
         dados = cursor.fetchall()
         return jsonify(dados)
     except Exception as e:
