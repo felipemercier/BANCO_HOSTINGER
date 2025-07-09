@@ -68,7 +68,7 @@ def login():
     else:
         return jsonify({"erro": "Credenciais inválidas"}), 401
 
-# Rota protegida de exemplo
+# Rota protegida
 @app.route('/producoes')
 @autenticar
 def producoes():
@@ -84,5 +84,8 @@ def producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
+# Configuração para Render
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
+
