@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
 from datetime import datetime, timedelta
+from functools import wraps
 import os
 import jwt
 from dotenv import load_dotenv
@@ -13,18 +14,34 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
 
-# Configuração do pool de conexões
+# Pool de conexões (reduzido para evitar excesso)
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
     "database": os.getenv("DB_NAME")
 }
-pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=10, **config)
+pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
 
 @app.route('/')
 def home():
     return 'API conectada à Hostinger!'
+
+# Autenticação via token
+def autenticar(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"erro": "Token não fornecido."}), 401
+        try:
+            jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        except jwt.ExpiredSignatureError:
+            return jsonify({"erro": "Token expirado."}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"erro": "Token inválido."}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # Rota de login
 @app.route('/login', methods=['POST'])
@@ -33,7 +50,7 @@ def login():
     usuario = data.get("username")
     senha = data.get("password")
 
-    # Simples: podemos trocar por consulta ao banco futuramente
+    # Futuramente substituir por validação no banco
     if usuario == "admin" and senha == "senha123":
         token = jwt.encode({
             "user": usuario,
@@ -43,7 +60,9 @@ def login():
     else:
         return jsonify({"erro": "Credenciais inválidas"}), 401
 
+# Listar produções
 @app.route('/producoes', methods=['GET'])
+@autenticar
 def listar_producoes():
     try:
         conn = pool.get_connection()
@@ -64,7 +83,9 @@ def listar_producoes():
         cursor.close()
         conn.close()
 
+# Adicionar produção
 @app.route('/producoes', methods=['POST'])
+@autenticar
 def adicionar_producao():
     dados = request.json
     produto = dados.get('produto')
@@ -90,7 +111,9 @@ def adicionar_producao():
         cursor.close()
         conn.close()
 
+# Atualizar status
 @app.route('/producoes/<int:id>', methods=['PUT'])
+@autenticar
 def atualizar_status(id):
     dados = request.json
     novo_status = dados.get('status')
@@ -145,6 +168,7 @@ def atualizar_status(id):
         cursor.close()
         conn.close()
 
+# Iniciar servidor
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
