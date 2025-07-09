@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
+from mysql.connector import Error
 import os
 from dotenv import load_dotenv
 
@@ -47,10 +48,50 @@ def inserir_producao():
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO producao (produto, tamanho, erp_id, status) VALUES (%s, %s, %s, %s)", (produto, tamanho, erp_id, status))
+        cursor.execute(
+            "INSERT INTO producao (produto, tamanho, erp_id, status) VALUES (%s, %s, %s, %s)",
+            (produto, tamanho, erp_id, status)
+        )
         conn.commit()
         return jsonify({"mensagem": "Produção inserida com sucesso!"})
     except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/producoes/<int:id>', methods=["PUT"])
+def atualizar_status(id):
+    try:
+        dados = request.get_json()
+        novo_status = dados.get("status")
+
+        if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
+            return jsonify({"erro": "Status inválido"}), 400
+
+        colunas_data = {
+            "on_demand": "data_on_demand",
+            "fila": "data_fila",
+            "construcao": "data_construcao",
+            "finalizado": "data_finalizado"
+        }
+
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+
+        coluna_data = colunas_data[novo_status]
+
+        sql = f"""
+            UPDATE producao
+            SET status = %s, {coluna_data} = NOW()
+            WHERE id = %s
+        """
+        cursor.execute(sql, (novo_status, id))
+        conn.commit()
+
+        return jsonify({"mensagem": "Status atualizado com sucesso"}), 200
+    except Error as e:
+        print("Erro:", e)
         return jsonify({"erro": str(e)}), 500
     finally:
         if cursor: cursor.close()
