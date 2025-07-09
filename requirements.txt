@@ -2,5 +2,3 @@ flask
 flask_cors
 mysql-connector-python
 python-dotenv
-PyJWT==2.8.0
-requests
