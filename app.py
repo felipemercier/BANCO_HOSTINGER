@@ -65,7 +65,8 @@ def login():
             "token",
             token,
             httponly=True,
-            samesite="Lax",
+            samesite="None",
+            secure=True,
             max_age=60 * 60 * 6  # 6 horas
         )
         return resp
