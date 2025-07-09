@@ -5,18 +5,17 @@ from datetime import datetime, timedelta
 from functools import wraps
 import os
 import jwt
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-
-# CORS configurado para permitir envio de cookies
 CORS(app, supports_credentials=True, origins=["https://www.martiermedia.shop"])
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
 
-# Configuração do banco com pool mínimo (evita exceder conexões simultâneas)
+# Configuração do pool de conexões
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
@@ -29,7 +28,7 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=1, **config)
 def home():
     return 'API conectada à Hostinger!'
 
-# Middleware de autenticação
+# Decorador para autenticação por cookie
 def autenticar(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -62,17 +61,16 @@ def login():
         resp.set_cookie(
             "token", token,
             httponly=True,
-            secure=True,           # ✅ necessário para HTTPS
             samesite="Lax",
             max_age=60 * 60 * 6,
-            path="/"               # ✅ válido para todo o domínio
+            path="/"
         )
         return resp
     else:
         return jsonify({"erro": "Credenciais inválidas"}), 401
 
-# Rota protegida
-@app.route('/producoes')
+# Rota protegida: listar produções
+@app.route('/producoes', methods=["GET"])
 @autenticar
 def producoes():
     conn = None
@@ -89,7 +87,58 @@ def producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Execução local ou em Render
+# Rota protegida: importar produtos da WBuy
+@app.route('/importar-produtos', methods=["GET"])
+@autenticar
+def importar_produtos():
+    try:
+        headers = {
+            "Authorization": os.getenv("WBUY_TOKEN"),
+            "Content-Type": "application/json"
+        }
+        url = "https://sistema.sistemawbuy.com.br/api/v1/product/?ativo=1&limit=9999"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            produtos = data.get("data", [])
+            return jsonify(produtos)
+        else:
+            return jsonify({
+                "erro": "Erro ao buscar produtos",
+                "status": response.status_code
+            }), 500
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+# Rota protegida: criar produção (POST)
+@app.route('/producoes', methods=["POST"])
+@autenticar
+def criar_producao():
+    dados = request.get_json()
+    produto = dados.get("produto")
+    tamanho = dados.get("tamanho")
+    erp_id = dados.get("erp_id")
+    status = dados.get("status", "fila")
+
+    conn = None
+    cursor = None
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO producao (produto, tamanho, erp_id, status)
+            VALUES (%s, %s, %s, %s)
+        """, (produto, tamanho, erp_id, status))
+        conn.commit()
+        return jsonify({"mensagem": "Produção criada com sucesso"})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# Início do servidor
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
