@@ -11,12 +11,16 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ⚠️ Ajuste importante aqui:
-CORS(app, supports_credentials=True, origins=["https://martiermedia.shop"])
+# ✅ CORS corretamente configurado para uso com cookies (credentials)
+CORS(app, supports_credentials=True, resources={
+    r"/*": {
+        "origins": ["https://martiermedia.shop"]
+    }
+})
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
 
-# Pool de conexões
+# Configuração do pool de conexões MySQL
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
@@ -29,7 +33,7 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
 def home():
     return 'API conectada à Hostinger!'
 
-# Middleware de autenticação via token
+# Middleware de autenticação com token JWT
 def autenticar(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -45,6 +49,7 @@ def autenticar(f):
         return f(*args, **kwargs)
     return decorated
 
+# Rota de login que define o cookie com o token JWT
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -67,6 +72,7 @@ def login():
         return resp
     return jsonify({"erro": "Credenciais inválidas"}), 401
 
+# Listar produções
 @app.route('/producoes', methods=['GET'])
 @autenticar
 def listar_producoes():
@@ -88,6 +94,7 @@ def listar_producoes():
         cursor.close()
         conn.close()
 
+# Adicionar nova produção
 @app.route('/producoes', methods=['POST'])
 @autenticar
 def adicionar_producao():
@@ -115,6 +122,7 @@ def adicionar_producao():
         cursor.close()
         conn.close()
 
+# Atualizar status de produção
 @app.route('/producoes/<int:id>', methods=['PUT'])
 @autenticar
 def atualizar_status(id):
@@ -156,6 +164,7 @@ def atualizar_status(id):
         cursor.close()
         conn.close()
 
+# Iniciar servidor
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
