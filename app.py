@@ -14,20 +14,20 @@ CORS(app, supports_credentials=True, origins=["https://www.martiermedia.shop"])
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
 
-# Configuração da conexão com o banco de dados
+# Configuração do banco com pool mínimo (evita exceder conexões simultâneas)
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
     "database": os.getenv("DB_NAME")
 }
-pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
+pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=1, **config)
 
 @app.route('/')
 def home():
     return 'API conectada à Hostinger!'
 
-# Função de autenticação baseada em token
+# Autenticação via token
 def autenticar(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -62,7 +62,7 @@ def login():
             httponly=True,
             samesite="Lax",
             max_age=60 * 60 * 6,
-            path="/martier-site"  # <- IMPORTANTE
+            path="/martier-site"
         )
         return resp
     else:
@@ -72,6 +72,8 @@ def login():
 @app.route('/producoes')
 @autenticar
 def producoes():
+    conn = None
+    cursor = None
     try:
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
@@ -84,8 +86,7 @@ def producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Configuração para Render
+# Execução no Render
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
