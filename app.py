@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
 
-# Pool de conexões (reduzido para evitar excesso)
+# Pool de conexões
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
@@ -27,36 +27,48 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
 def home():
     return 'API conectada à Hostinger!'
 
-# Autenticação via token
+# Middleware de autenticação via token (cookie ou header)
 def autenticar(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get("Authorization")
         if not token:
+            token = request.cookies.get("token")
+        if not token:
             return jsonify({"erro": "Token não fornecido."}), 401
+
         try:
             jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         except jwt.ExpiredSignatureError:
             return jsonify({"erro": "Token expirado."}), 401
         except jwt.InvalidTokenError:
             return jsonify({"erro": "Token inválido."}), 401
+
         return f(*args, **kwargs)
     return decorated
 
-# Rota de login
+# Rota de login que define o token em um cookie HttpOnly
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
     usuario = data.get("username")
     senha = data.get("password")
 
-    # Futuramente substituir por validação no banco
     if usuario == "admin" and senha == "senha123":
         token = jwt.encode({
             "user": usuario,
             "exp": datetime.utcnow() + timedelta(hours=6)
         }, SECRET_KEY, algorithm="HS256")
-        return jsonify({"token": token})
+
+        resp = make_response(jsonify({"mensagem": "Login bem-sucedido"}))
+        resp.set_cookie(
+            "token",
+            token,
+            httponly=True,
+            samesite="Lax",
+            max_age=60 * 60 * 6  # 6 horas
+        )
+        return resp
     else:
         return jsonify({"erro": "Credenciais inválidas"}), 401
 
@@ -131,28 +143,24 @@ def atualizar_status(id):
                 SET status = %s, data_construcao = NOW()
                 WHERE id = %s
             """, (novo_status, id))
-
         elif novo_status == 'finalizado':
             cursor.execute("""
                 UPDATE producao 
                 SET status = %s, data_finalizado = NOW()
                 WHERE id = %s
             """, (novo_status, id))
-
         elif novo_status == 'fila':
             cursor.execute("""
                 UPDATE producao 
                 SET status = %s, data_fila = NOW()
                 WHERE id = %s
             """, (novo_status, id))
-
         elif novo_status == 'on_demand':
             cursor.execute("""
                 UPDATE producao 
                 SET status = %s, data_on_demand = NOW()
                 WHERE id = %s
             """, (novo_status, id))
-
         else:
             cursor.execute("""
                 UPDATE producao 
