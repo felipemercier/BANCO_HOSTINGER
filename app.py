@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# CORS configurado para permitir envio de cookies
 CORS(app, supports_credentials=True, origins=["https://www.martiermedia.shop"])
 
 SECRET_KEY = os.getenv("SECRET_KEY", "segredo123")
@@ -27,7 +29,7 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=1, **config)
 def home():
     return 'API conectada à Hostinger!'
 
-# Autenticação via token
+# Middleware de autenticação
 def autenticar(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -60,9 +62,10 @@ def login():
         resp.set_cookie(
             "token", token,
             httponly=True,
+            secure=True,           # ✅ necessário para HTTPS
             samesite="Lax",
             max_age=60 * 60 * 6,
-            path="/martier-site"
+            path="/"               # ✅ válido para todo o domínio
         )
         return resp
     else:
@@ -86,7 +89,7 @@ def producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Execução no Render
+# Execução local ou em Render
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
