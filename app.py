@@ -4,6 +4,7 @@ from mysql.connector.pooling import MySQLConnectionPool
 from mysql.connector import Error
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -45,14 +46,18 @@ def inserir_producao():
     erp_id = dados.get("erp_id")
     status = dados.get("status")
     quantidade = dados.get("quantidade", 1)
-    origem = dados.get("origem")  # <-- NOVO
+    origem = dados.get("origem")
 
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
+
+        # Corrigir fuso horário para Brasília
+        brasilia_now = datetime.utcnow() - timedelta(hours=3)
+
         cursor.execute(
-            "INSERT INTO producao (produto, tamanho, erp_id, status, quantidade, origem, criado_em) VALUES (%s, %s, %s, %s, %s, %s, NOW())",
-            (produto, tamanho, erp_id, status, quantidade, origem)
+            "INSERT INTO producao (produto, tamanho, erp_id, status, quantidade, origem, criado_em) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (produto, tamanho, erp_id, status, quantidade, origem, brasilia_now)
         )
         conn.commit()
         return jsonify({"mensagem": "Produção inserida com sucesso!"})
@@ -78,22 +83,22 @@ def atualizar_status(id):
             "finalizado": "data_finalizado"
         }
 
-        conn = pool.get_connection()
-        cursor = conn.cursor()
-
+        # Corrigir fuso horário para Brasília
+        brasilia_now = datetime.utcnow() - timedelta(hours=3)
         coluna_data = colunas_data[novo_status]
 
+        conn = pool.get_connection()
+        cursor = conn.cursor()
         sql = f"""
             UPDATE producao
-            SET status = %s, {coluna_data} = NOW()
+            SET status = %s, {coluna_data} = %s
             WHERE id = %s
         """
-        cursor.execute(sql, (novo_status, id))
+        cursor.execute(sql, (novo_status, brasilia_now, id))
         conn.commit()
 
         return jsonify({"mensagem": "Status atualizado com sucesso"}), 200
     except Error as e:
-        print("Erro:", e)
         return jsonify({"erro": str(e)}), 500
     finally:
         if cursor: cursor.close()
