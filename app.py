@@ -44,14 +44,15 @@ def inserir_producao():
     tamanho = dados.get("tamanho")
     erp_id = dados.get("erp_id")
     status = dados.get("status")
-    quantidade = dados.get("quantidade", 1)  # valor padrão se não vier do frontend
+    quantidade = dados.get("quantidade", 1)
+    origem = dados.get("origem")  # <-- NOVO
 
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO producao (produto, tamanho, erp_id, status, quantidade) VALUES (%s, %s, %s, %s, %s)",
-            (produto, tamanho, erp_id, status, quantidade)
+            "INSERT INTO producao (produto, tamanho, erp_id, status, quantidade, origem, criado_em) VALUES (%s, %s, %s, %s, %s, %s, NOW())",
+            (produto, tamanho, erp_id, status, quantidade, origem)
         )
         conn.commit()
         return jsonify({"mensagem": "Produção inserida com sucesso!"})
