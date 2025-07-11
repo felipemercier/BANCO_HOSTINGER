@@ -52,7 +52,6 @@ def inserir_producao():
         conn = pool.get_connection()
         cursor = conn.cursor()
 
-        # Corrigir fuso horário para Brasília
         brasilia_now = datetime.utcnow() - timedelta(hours=3)
 
         cursor.execute(
@@ -72,18 +71,15 @@ def atualizar_status(id):
     try:
         dados = request.get_json()
 
-        # Se o campo 'desativado' estiver presente, atualizar apenas ele
         if "desativado" in dados:
             desativado = dados.get("desativado", 0)
 
             conn = pool.get_connection()
             cursor = conn.cursor()
-            sql = "UPDATE producao SET desativado = %s WHERE id = %s"
-            cursor.execute(sql, (desativado, id))
+            cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (desativado, id))
             conn.commit()
             return jsonify({"mensagem": "Campo 'desativado' atualizado com sucesso"}), 200
 
-        # Caso contrário, tratar mudança de status
         novo_status = dados.get("status")
         if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
             return jsonify({"erro": "Status inválido"}), 400
@@ -100,17 +96,29 @@ def atualizar_status(id):
 
         conn = pool.get_connection()
         cursor = conn.cursor()
-        sql = f"""
-            UPDATE producao
-            SET status = %s, {coluna_data} = %s, desativado = 0
-            WHERE id = %s
-        """
-        cursor.execute(sql, (novo_status, brasilia_now, id))
+        cursor.execute(
+            f"UPDATE producao SET status = %s, {coluna_data} = %s, desativado = 0 WHERE id = %s",
+            (novo_status, brasilia_now, id)
+        )
         conn.commit()
 
         return jsonify({"mensagem": "Status atualizado com sucesso"}), 200
 
     except Error as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/producoes/<int:id>', methods=["DELETE"])
+def deletar_producao(id):
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM producao WHERE id = %s", (id,))
+        conn.commit()
+        return jsonify({"mensagem": "Produção excluída com sucesso!"}), 200
+    except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
         if cursor: cursor.close()
