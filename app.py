@@ -115,11 +115,14 @@ def atualizar_status(id):
 @app.route('/producoes/<int:id>', methods=["DELETE"])
 def deletar_producao(id):
     try:
+        dados = request.get_json()
+        motivo = dados.get("motivo", "Excluído manualmente")
+
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM producao WHERE id = %s", (id,))
+        cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (motivo, id))
         conn.commit()
-        return jsonify({"mensagem": "Produção excluída com sucesso!"}), 200
+        return jsonify({"mensagem": "Produção marcada como excluída", "motivo": motivo}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
@@ -139,6 +142,3 @@ def importar_produtos():
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
-
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
