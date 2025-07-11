@@ -71,8 +71,20 @@ def inserir_producao():
 def atualizar_status(id):
     try:
         dados = request.get_json()
-        novo_status = dados.get("status")
 
+        # Se o campo 'desativado' estiver presente, atualizar apenas ele
+        if "desativado" in dados:
+            desativado = dados.get("desativado", 0)
+
+            conn = pool.get_connection()
+            cursor = conn.cursor()
+            sql = "UPDATE producao SET desativado = %s WHERE id = %s"
+            cursor.execute(sql, (desativado, id))
+            conn.commit()
+            return jsonify({"mensagem": "Campo 'desativado' atualizado com sucesso"}), 200
+
+        # Caso contrário, tratar mudança de status
+        novo_status = dados.get("status")
         if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
             return jsonify({"erro": "Status inválido"}), 400
 
@@ -83,7 +95,6 @@ def atualizar_status(id):
             "finalizado": "data_finalizado"
         }
 
-        # Corrigir fuso horário para Brasília
         brasilia_now = datetime.utcnow() - timedelta(hours=3)
         coluna_data = colunas_data[novo_status]
 
@@ -91,13 +102,14 @@ def atualizar_status(id):
         cursor = conn.cursor()
         sql = f"""
             UPDATE producao
-            SET status = %s, {coluna_data} = %s
+            SET status = %s, {coluna_data} = %s, desativado = 0
             WHERE id = %s
         """
         cursor.execute(sql, (novo_status, brasilia_now, id))
         conn.commit()
 
         return jsonify({"mensagem": "Status atualizado com sucesso"}), 200
+
     except Error as e:
         return jsonify({"erro": str(e)}), 500
     finally:
