@@ -71,15 +71,17 @@ def atualizar_status(id):
     try:
         dados = request.get_json()
 
+        # Atualização do campo desativado com justificativa (texto)
         if "desativado" in dados:
-            desativado = dados.get("desativado", 0)
+            motivo = dados["desativado"]  # texto livre
 
             conn = pool.get_connection()
             cursor = conn.cursor()
-            cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (desativado, id))
+            cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (motivo, id))
             conn.commit()
-            return jsonify({"mensagem": "Campo 'desativado' atualizado com sucesso"}), 200
+            return jsonify({"mensagem": "Motivo de desativação salvo com sucesso"}), 200
 
+        # Atualização de status normal
         novo_status = dados.get("status")
         if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
             return jsonify({"erro": "Status inválido"}), 400
@@ -97,7 +99,7 @@ def atualizar_status(id):
         conn = pool.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            f"UPDATE producao SET status = %s, {coluna_data} = %s, desativado = 0 WHERE id = %s",
+            f"UPDATE producao SET status = %s, {coluna_data} = %s, desativado = NULL WHERE id = %s",
             (novo_status, brasilia_now, id)
         )
         conn.commit()
