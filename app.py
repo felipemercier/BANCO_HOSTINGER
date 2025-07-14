@@ -70,19 +70,8 @@ def inserir_producao():
 def atualizar_status(id):
     try:
         dados = request.get_json()
-
-        # Atualização do campo desativado com justificativa (texto)
-        if "desativado" in dados:
-            motivo = dados["desativado"]  # texto livre
-
-            conn = pool.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (motivo, id))
-            conn.commit()
-            return jsonify({"mensagem": "Motivo de desativação salvo com sucesso"}), 200
-
-        # Atualização de status normal
         novo_status = dados.get("status")
+
         if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
             return jsonify({"erro": "Status inválido"}), 400
 
@@ -99,7 +88,7 @@ def atualizar_status(id):
         conn = pool.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            f"UPDATE producao SET status = %s, {coluna_data} = %s, desativado = NULL WHERE id = %s",
+            f"UPDATE producao SET status = %s, {coluna_data} = %s WHERE id = %s",
             (novo_status, brasilia_now, id)
         )
         conn.commit()
@@ -115,14 +104,11 @@ def atualizar_status(id):
 @app.route('/producoes/<int:id>', methods=["DELETE"])
 def deletar_producao(id):
     try:
-        dados = request.get_json()
-        motivo = dados.get("motivo", "Excluído manualmente")
-
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE producao SET desativado = %s WHERE id = %s", (motivo, id))
+        cursor.execute("DELETE FROM producao WHERE id = %s", (id,))
         conn.commit()
-        return jsonify({"mensagem": "Produção marcada como excluída", "motivo": motivo}), 200
+        return jsonify({"mensagem": "Produção excluída com sucesso"}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
