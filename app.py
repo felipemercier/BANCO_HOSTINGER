@@ -67,35 +67,60 @@ def inserir_producao():
         if conn: conn.close()
 
 @app.route('/producoes/<int:id>', methods=["PUT"])
-def atualizar_status(id):
+def atualizar_producao(id):
     try:
         dados = request.get_json()
-        novo_status = dados.get("status")
-
-        if novo_status not in ["on_demand", "fila", "construcao", "finalizado"]:
-            return jsonify({"erro": "Status inválido"}), 400
-
-        colunas_data = {
-            "on_demand": "data_on_demand",
-            "fila": "data_fila",
-            "construcao": "data_construcao",
-            "finalizado": "data_finalizado"
-        }
-
-        brasilia_now = datetime.utcnow() - timedelta(hours=3)
-        coluna_data = colunas_data[novo_status]
-
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            f"UPDATE producao SET status = %s, {coluna_data} = %s WHERE id = %s",
-            (novo_status, brasilia_now, id)
-        )
+
+        campos_sql = []
+        valores = []
+
+        # Atualizar status e sua respectiva data
+        novo_status = dados.get("status")
+        if novo_status in ["on_demand", "fila", "construcao", "finalizado"]:
+            campos_sql.append("status = %s")
+            valores.append(novo_status)
+
+            colunas_data = {
+                "on_demand": "data_on_demand",
+                "fila": "data_fila",
+                "construcao": "data_construcao",
+                "finalizado": "data_finalizado"
+            }
+
+            coluna_data = colunas_data[novo_status]
+            campos_sql.append(f"{coluna_data} = %s")
+            valores.append(datetime.utcnow() - timedelta(hours=3))
+
+        # Atualizar quantidade
+        if "quantidade" in dados:
+            campos_sql.append("quantidade = %s")
+            valores.append(dados["quantidade"])
+
+        # Atualizar campo desativado
+        if "desativado" in dados:
+            campos_sql.append("desativado = %s")
+            valores.append(dados["desativado"])
+
+        # Atualizar observacao (justificativa)
+        if "observacao" in dados:
+            campos_sql.append("observacao = %s")
+            valores.append(dados["observacao"])
+
+        # Verifica se tem algo pra atualizar
+        if not campos_sql:
+            return jsonify({"erro": "Nenhum campo válido enviado."}), 400
+
+        # Monta SQL
+        sql = f"UPDATE producao SET {', '.join(campos_sql)} WHERE id = %s"
+        valores.append(id)
+
+        cursor.execute(sql, valores)
         conn.commit()
+        return jsonify({"mensagem": "Produção atualizada com sucesso"}), 200
 
-        return jsonify({"mensagem": "Status atualizado com sucesso"}), 200
-
-    except Error as e:
+    except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
         if cursor: cursor.close()
