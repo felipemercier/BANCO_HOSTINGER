@@ -24,6 +24,7 @@ pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
 def home():
     return 'API conectada à Hostinger!'
 
+# Listar todas as produções
 @app.route('/producoes', methods=["GET"])
 def listar_producoes():
     try:
@@ -38,6 +39,7 @@ def listar_producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
+# Inserir nova produção
 @app.route('/producoes', methods=["POST"])
 def inserir_producao():
     dados = request.get_json()
@@ -51,7 +53,6 @@ def inserir_producao():
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
-
         brasilia_now = datetime.utcnow() - timedelta(hours=3)
 
         cursor.execute(
@@ -66,6 +67,7 @@ def inserir_producao():
         if cursor: cursor.close()
         if conn: conn.close()
 
+# Atualizar produção (quantidade, status, observação etc.)
 @app.route('/producoes/<int:id>', methods=["PUT"])
 def atualizar_producao(id):
     try:
@@ -76,7 +78,7 @@ def atualizar_producao(id):
         campos_sql = []
         valores = []
 
-        # Atualizar status e sua respectiva data
+        # Atualizar status e data correspondente
         novo_status = dados.get("status")
         if novo_status in ["on_demand", "fila", "construcao", "finalizado"]:
             campos_sql.append("status = %s")
@@ -103,16 +105,16 @@ def atualizar_producao(id):
             campos_sql.append("desativado = %s")
             valores.append(dados["desativado"])
 
-        # Atualizar observacao (justificativa)
+        # Atualizar observacao
         if "observacao" in dados:
             campos_sql.append("observacao = %s")
             valores.append(dados["observacao"])
 
-        # Verifica se tem algo pra atualizar
+        # Nenhum campo válido
         if not campos_sql:
             return jsonify({"erro": "Nenhum campo válido enviado."}), 400
 
-        # Monta SQL
+        # Montar e executar SQL
         sql = f"UPDATE producao SET {', '.join(campos_sql)} WHERE id = %s"
         valores.append(id)
 
@@ -126,20 +128,32 @@ def atualizar_producao(id):
         if cursor: cursor.close()
         if conn: conn.close()
 
+# Excluir produção (remover do banco)
 @app.route('/producoes/<int:id>', methods=["DELETE"])
 def deletar_producao(id):
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
+
+        # Verifica se item existe antes de excluir
+        cursor.execute("SELECT id FROM producao WHERE id = %s", (id,))
+        if not cursor.fetchone():
+            return jsonify({"erro": "Item não encontrado"}), 404
+
         cursor.execute("DELETE FROM producao WHERE id = %s", (id,))
         conn.commit()
+
+        print(f"[DELETE] Produção ID {id} excluída.")
         return jsonify({"mensagem": "Produção excluída com sucesso"}), 200
+
     except Exception as e:
+        print(f"[ERRO DELETE] {str(e)}")
         return jsonify({"erro": str(e)}), 500
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
 
+# Importar lista de produtos únicos (usado no corte)
 @app.route('/importar-produtos', methods=["GET"])
 def importar_produtos():
     try:
