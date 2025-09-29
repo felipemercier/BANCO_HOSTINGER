@@ -26,7 +26,6 @@ def _dict_conn_cursor():
     return conn, cur
 
 def _today_br_dateiso():
-    # simples: UTC-3
     return (datetime.utcnow() - timedelta(hours=3)).date().isoformat()
 
 @app.route("/")
@@ -187,7 +186,6 @@ def inserir_cor():
         except: pass
 
 # ========================= COLETA (Protocolo) ==========================
-# LISTAGEM CRUD (já existia)
 @app.get("/api/coleta")
 def coleta_list():
     d1 = request.args.get("from")
@@ -362,7 +360,6 @@ def coleta_fechar_dia():
         conn = pool.get_connection()
         cur  = conn.cursor(dictionary=True)
 
-        # há itens de hoje sem protocolo?
         cur.execute("""
            SELECT id FROM coleta_protocolos
            WHERE active=1 AND dateISO=%s AND (protocolo_num IS NULL OR protocolo_num='')
@@ -373,7 +370,6 @@ def coleta_fechar_dia():
 
         protocolo = _mk_protocolo_for_date(cur, date_iso)
 
-        # aplica protocolo
         cur2 = conn.cursor()
         cur2.execute("""
             UPDATE coleta_protocolos
@@ -383,7 +379,6 @@ def coleta_fechar_dia():
         conn.commit()
         cur2.close()
 
-        # retorna itens do protocolo para impressão
         cur.execute("""
             SELECT code, pedido
             FROM coleta_protocolos
@@ -418,7 +413,7 @@ def coleta_historico():
         cur.execute("""
             SELECT
               protocolo_num AS protocolo,
-              MIN(printed_at) AS printed_at,
+              DATE_FORMAT(MIN(printed_at), '%%Y-%%m-%%d %%H:%%i:%%s') AS printed_at,
               COALESCE(MAX(printed_by),'') AS printed_by,
               COUNT(*) AS qtd,
               COALESCE(SUM(valorCliente),0) AS pago_cliente,
@@ -428,7 +423,7 @@ def coleta_historico():
               AND printed_at IS NOT NULL
               AND dateISO BETWEEN %s AND %s
             GROUP BY protocolo_num
-            ORDER BY printed_at DESC
+            ORDER BY MIN(printed_at) DESC
         """, (frm, to))
         rows = cur.fetchall()
         for r in rows:
@@ -440,13 +435,22 @@ def coleta_historico():
         try: cur.close(); conn.close()
         except: pass
 
+# --- alias para compatibilidade com o front (historico.js usa /protocolos)
+@app.get("/api/coleta/protocolos")
+def coleta_historico_alias():
+    return coleta_historico()
+
+@app.post("/api/coleta/print")
+def coleta_print_alias():
+    return coleta_fechar_dia()
+
 @app.get("/api/coleta/protocolo/<protocolo>")
 def coleta_protocolo_itens(protocolo):
     """Itens de um protocolo para reimpressão/consulta."""
     try:
         conn, cur = _dict_conn_cursor()
         cur.execute("""
-            SELECT code, pedido, valorCliente, valorCorreios
+            SELECT code, timeHHMMSS, service, uf, nf, pedido, valorCliente, valorCorreios
             FROM coleta_protocolos
             WHERE protocolo_num=%s
             ORDER BY id
