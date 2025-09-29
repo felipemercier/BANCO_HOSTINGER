@@ -20,13 +20,17 @@ config = {
 }
 pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
 
+def _dict_conn_cursor():
+    conn = pool.get_connection()
+    cur  = conn.cursor(dictionary=True)
+    return conn, cur
+
 @app.route('/')
 def home():
     return 'API conectada à Hostinger!'
 
 # ========================= PRODUCAO ==========================
 
-# Listar todas as produções
 @app.route('/producoes', methods=["GET"])
 def listar_producoes():
     try:
@@ -41,7 +45,6 @@ def listar_producoes():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Inserir nova produção
 @app.route('/producoes', methods=["POST"])
 def inserir_producao():
     dados = request.get_json()
@@ -69,7 +72,6 @@ def inserir_producao():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Atualizar produção
 @app.route('/producoes/<int:id>', methods=["PUT"])
 def atualizar_producao(id):
     try:
@@ -124,7 +126,6 @@ def atualizar_producao(id):
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Excluir produção
 @app.route('/producoes/<int:id>', methods=["DELETE"])
 def deletar_producao(id):
     try:
@@ -148,7 +149,6 @@ def deletar_producao(id):
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Importar lista de produtos distintos
 @app.route('/importar-produtos', methods=["GET"])
 def importar_produtos():
     try:
@@ -165,7 +165,6 @@ def importar_produtos():
 
 # ========================= MAPA DE CORES ==========================
 
-# Listar todas as cores
 @app.route('/cores', methods=["GET"])
 def listar_cores():
     try:
@@ -180,7 +179,6 @@ def listar_cores():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Inserir nova cor
 @app.route('/cores', methods=["POST"])
 def inserir_cor():
     dados = request.get_json()
@@ -201,6 +199,150 @@ def inserir_cor():
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+# ========================= COLETA (Protocolo) ==========================
+
+@app.route('/api/coleta', methods=['GET'])
+def coleta_list():
+    d1 = request.args.get('from')
+    d2 = request.args.get('to')
+    include_deleted = request.args.get('include_deleted', '0') == '1'
+
+    sql = "SELECT * FROM coleta_protocolos WHERE 1"
+    params = []
+    if not include_deleted:
+        sql += " AND active=1"
+    if d1:
+        sql += " AND dateISO >= %s"; params.append(d1)
+    if d2:
+        sql += " AND dateISO <= %s"; params.append(d2)
+    if not d1 and not d2:
+        sql += " AND dateISO >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)"
+    sql += " ORDER BY dateISO DESC, timeHHMMSS DESC, id DESC"
+
+    try:
+        conn, cur = _dict_conn_cursor()
+        cur.execute(sql, params)
+        return jsonify({"rows": cur.fetchall()})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+@app.route('/api/coleta', methods=['POST'])
+def coleta_upsert():
+    payload = request.get_json(silent=True) or {}
+    items = payload if isinstance(payload, list) else [payload]
+
+    sql = """
+        INSERT INTO coleta_protocolos
+          (dateISO, timeHHMMSS, code, service, uf, peso, nf,
+           valorCorreios, valorCliente, pedido, registradoPor, active)
+        VALUES
+          (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+        ON DUPLICATE KEY UPDATE
+          service=VALUES(service),
+          uf=VALUES(uf),
+          peso=VALUES(peso),
+          nf=VALUES(nf),
+          valorCorreios=VALUES(valorCorreios),
+          valorCliente=VALUES(valorCliente),
+          pedido=VALUES(pedido),
+          registradoPor=VALUES(registradoPor),
+          active=1,
+          deleted_at=NULL
+    """
+
+    to_exec = []
+    for r in items:
+        to_exec.append((
+            r.get("dateISO"),
+            r.get("time") or r.get("timeHHMMSS"),
+            r.get("code"),
+            r.get("service"),
+            r.get("uf"),
+            r.get("peso"),
+            r.get("nf"),
+            r.get("valorCorreios"),
+            r.get("valorCliente"),
+            r.get("pedido"),
+            r.get("registradoPor"),
+        ))
+
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor()
+        cur.executemany(sql, to_exec)
+        conn.commit()
+        return jsonify({"ok": True, "count": len(to_exec)})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+@app.route('/api/coleta/<int:item_id>', methods=['DELETE'])
+def coleta_soft_delete(item_id):
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor()
+        cur.execute("UPDATE coleta_protocolos SET active=0, deleted_at=NOW() WHERE id=%s AND active=1", (item_id,))
+        conn.commit()
+        return jsonify({"ok": True, "id": item_id})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+@app.route('/api/coleta/<int:item_id>/restore', methods=['POST'])
+def coleta_restore(item_id):
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor()
+        cur.execute("UPDATE coleta_protocolos SET active=1, deleted_at=NULL WHERE id=%s", (item_id,))
+        conn.commit()
+        return jsonify({"ok": True, "id": item_id})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+@app.route('/api/coleta/func', methods=['GET'])
+def coleta_func_list():
+    try:
+        conn, cur = _dict_conn_cursor()
+        cur.execute("SELECT * FROM coleta_funcionarios ORDER BY nome")
+        return jsonify({"rows": cur.fetchall()})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+@app.route('/api/coleta/func', methods=['POST'])
+def coleta_func_upsert():
+    data = request.get_json(silent=True) or {}
+    nome = (data.get("nome") or "").strip()
+    is_default = 1 if data.get("is_default") else 0
+    if not nome:
+        return jsonify({"erro": "nome é obrigatório"}), 400
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor()
+        cur.execute("INSERT IGNORE INTO coleta_funcionarios (nome) VALUES (%s)", (nome,))
+        if is_default:
+            cur.execute("UPDATE coleta_funcionarios SET is_default=0")
+            cur.execute("UPDATE coleta_funcionarios SET is_default=1 WHERE nome=%s", (nome,))
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
 
 # ================================================================
 
