@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
 from mysql.connector import Error
-import os
+import os, re
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -11,7 +11,7 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Conexão com banco da Hostinger
+# -------- Conexão com banco da Hostinger --------
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
@@ -24,6 +24,10 @@ def _dict_conn_cursor():
     conn = pool.get_connection()
     cur  = conn.cursor(dictionary=True)
     return conn, cur
+
+def _today_br_dateiso():
+    # Data de hoje no fuso de Brasília (UTC-3)
+    return (datetime.utcnow() - timedelta(hours=3)).date().isoformat()
 
 @app.route('/')
 def home():
@@ -93,7 +97,6 @@ def atualizar_producao(id):
                 "construcao": "data_construcao",
                 "finalizado": "data_finalizado"
             }
-
             coluna_data = colunas_data[novo_status]
             campos_sql.append(f"{coluna_data} = %s")
             valores.append(datetime.utcnow() - timedelta(hours=3))
@@ -284,12 +287,33 @@ def coleta_upsert():
 
 @app.route('/api/coleta/<int:item_id>', methods=['DELETE'])
 def coleta_soft_delete(item_id):
+    """
+    Soft delete padrão (active=0). Se estourar o índice único
+    uk_code_date_active (Duplicate entry), faz hard delete como fallback.
+    """
     try:
         conn = pool.get_connection()
         cur  = conn.cursor()
-        cur.execute("UPDATE coleta_protocolos SET active=0, deleted_at=NOW() WHERE id=%s AND active=1", (item_id,))
-        conn.commit()
-        return jsonify({"ok": True, "id": item_id})
+        try:
+            # tenta soft delete
+            cur.execute(
+                "UPDATE coleta_protocolos "
+                "SET active=0, deleted_at=NOW() "
+                "WHERE id=%s AND active=1",
+                (item_id,)
+            )
+            conn.commit()
+            return jsonify({"ok": True, "id": item_id, "mode": "soft"}), 200
+
+        except Exception as e:
+            msg = (str(e) or "").lower()
+            if "duplicate entry" in msg or getattr(e, "errno", None) == 1062:
+                # conflito do índice único -> hard delete
+                cur.execute("DELETE FROM coleta_protocolos WHERE id=%s", (item_id,))
+                conn.commit()
+                return jsonify({"ok": True, "id": item_id, "mode": "hard"}), 200
+            raise
+
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
@@ -344,19 +368,7 @@ def coleta_func_upsert():
         try: cur.close(); conn.close()
         except: pass
 
-# ================================================================
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
 # ========================= PROTOCOLO (fechar dia + histórico) ==========================
-
-from datetime import datetime, timedelta
-import re
-
-def _today_br_dateiso():
-    # Data de hoje no fuso de Brasília (UTC-3)
-    return (datetime.utcnow() - timedelta(hours=3)).date().isoformat()
 
 def _mk_protocolo_for_date(cur, date_iso: str) -> str:
     """Gera PR-YYYYMMDD-### sequencial para a data."""
@@ -438,15 +450,13 @@ def coleta_historico():
     """
     Lista protocolos fechados no período.
     Query: from, to (YYYY-MM-DD). Defaults: últimos 30 dias.
-    Campos compatíveis com historico.js: protocolo_num, printed_at, printed_by,
-    qtd, total_cliente, total_correios, lucro.
+    Campos: protocolo_num, printed_at, printed_by, qtd, total_cliente, total_correios, lucro.
     """
     to  = request.args.get("to") or _today_br_dateiso()
     frm = request.args.get("from") or (datetime.fromisoformat(to) - timedelta(days=30)).date().isoformat()
 
     try:
         conn, cur = _dict_conn_cursor()
-        # Sem DATE_FORMAT para evitar conflito de % com o mysql-connector
         cur.execute("""
             SELECT
               protocolo_num                             AS protocolo_num,
@@ -464,7 +474,6 @@ def coleta_historico():
         """, (frm, to))
         rows = cur.fetchall()
 
-        # Normaliza tipos e calcula lucro
         for r in rows:
             pa = r.get("printed_at")
             if pa and not isinstance(pa, str):
@@ -480,12 +489,11 @@ def coleta_historico():
         try: cur.close(); conn.close()
         except: pass
 
-# Alias compatível com historico.js
+# Aliases compatíveis com o front historico.js
 @app.get("/api/coleta/protocolos")
 def coleta_historico_alias():
     return coleta_historico()
 
-# Alias opcional usado em alguns fronts
 @app.post("/api/coleta/print")
 def coleta_print_alias():
     return coleta_fechar_dia()
@@ -508,3 +516,7 @@ def coleta_protocolo_itens(protocolo):
     finally:
         try: cur.close(); conn.close()
         except: pass
+
+# ================================================================
+if __name__ == '__main__':
+    app.run(debug=True)
