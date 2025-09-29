@@ -428,6 +428,7 @@ def coleta_fechar_dia():
             SELECT code, pedido
             FROM coleta_protocolos
             WHERE dateISO=%s AND protocolo_num=%s
+              AND active=1
             ORDER BY id
         """, (date_iso, protocolo))
         items = cur.fetchall()
@@ -448,7 +449,7 @@ def coleta_fechar_dia():
 @app.get("/api/coleta/historico")
 def coleta_historico():
     """
-    Lista protocolos fechados no período.
+    Lista protocolos fechados no período (somente itens ativos).
     Query: from, to (YYYY-MM-DD). Defaults: últimos 30 dias.
     Campos: protocolo_num, printed_at, printed_by, qtd, total_cliente, total_correios, lucro.
     """
@@ -468,6 +469,7 @@ def coleta_historico():
             FROM coleta_protocolos
             WHERE protocolo_num IS NOT NULL
               AND printed_at   IS NOT NULL
+              AND active=1
               AND dateISO BETWEEN %s AND %s
             GROUP BY protocolo_num
             ORDER BY MIN(printed_at) DESC
@@ -507,6 +509,7 @@ def coleta_protocolo_itens(protocolo):
             SELECT code, timeHHMMSS, service, uf, nf, pedido, valorCliente, valorCorreios
             FROM coleta_protocolos
             WHERE protocolo_num=%s
+              AND active=1
             ORDER BY id
         """, (protocolo,))
         items = cur.fetchall()
