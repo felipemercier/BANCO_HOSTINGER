@@ -412,24 +412,25 @@ def coleta_historico():
         conn, cur = _dict_conn_cursor()
         cur.execute("""
             SELECT
-              protocolo_num AS protocolo,
-              DATE_FORMAT(MIN(printed_at), '%%Y-%%m-%%d %%H:%%i:%%s') AS printed_at,
-              COALESCE(MAX(printed_by),'') AS printed_by,
-              COUNT(*) AS qtd,
-              COALESCE(SUM(valorCliente),0) AS pago_cliente,
-              COALESCE(SUM(valorCorreios),0) AS pago_correios
+              protocolo_num                                         AS protocolo_num,
+              DATE_FORMAT(MIN(printed_at),'%Y-%m-%d %H:%i:%s')      AS printed_at,
+              COALESCE(MAX(printed_by), '')                         AS printed_by,
+              COUNT(*)                                              AS qtd,
+              ROUND(SUM(COALESCE(valorCliente,  0)), 2)             AS total_cliente,
+              ROUND(SUM(COALESCE(valorCorreios, 0)), 2)             AS total_correios
             FROM coleta_protocolos
             WHERE protocolo_num IS NOT NULL
-              AND printed_at IS NOT NULL
+              AND printed_at   IS NOT NULL
               AND dateISO BETWEEN %s AND %s
             GROUP BY protocolo_num
             ORDER BY MIN(printed_at) DESC
         """, (frm, to))
         rows = cur.fetchall()
         for r in rows:
-            r["lucro"] = float(r["pago_cliente"] or 0) - float(r["pago_correios"] or 0)
+            r["lucro"] = float(r.get("total_cliente") or 0) - float(r.get("total_correios") or 0)
         return jsonify({"ok": True, "from": frm, "to": to, "rows": rows})
     except Exception as e:
+        app.logger.exception("Erro ao carregar histórico")
         return jsonify({"erro": str(e)}), 500
     finally:
         try: cur.close(); conn.close()
