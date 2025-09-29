@@ -327,7 +327,7 @@ def coleta_func_upsert():
         try: cur.close(); conn.close()
         except: pass
 
-# -------- NOVAS ROTAS: protocolo (fechar dia + histórico) --------
+# -------- PROTOCOLO (fechar dia + histórico) --------
 def _mk_protocolo_for_date(cur, date_iso: str) -> str:
     """Gera PR-YYYYMMDD-### sequencial para a data."""
     cur.execute("""
@@ -410,10 +410,11 @@ def coleta_historico():
     frm = request.args.get("from") or (datetime.fromisoformat(to) - timedelta(days=30)).date().isoformat()
     try:
         conn, cur = _dict_conn_cursor()
+        # ATENÇÃO: percents escapados (%%) para o mysql-connector não confundir com placeholders
         cur.execute("""
             SELECT
               protocolo_num                                         AS protocolo_num,
-              DATE_FORMAT(MIN(printed_at),'%Y-%m-%d %H:%i:%s')      AS printed_at,
+              DATE_FORMAT(MIN(printed_at),'%%Y-%%m-%%d %%H:%%i:%%s') AS printed_at,
               COALESCE(MAX(printed_by), '')                         AS printed_by,
               COUNT(*)                                              AS qtd,
               ROUND(SUM(COALESCE(valorCliente,  0)), 2)             AS total_cliente,
@@ -436,7 +437,7 @@ def coleta_historico():
         try: cur.close(); conn.close()
         except: pass
 
-# --- alias para compatibilidade com o front (historico.js usa /protocolos)
+# --- alias compatível com historico.js
 @app.get("/api/coleta/protocolos")
 def coleta_historico_alias():
     return coleta_historico()
