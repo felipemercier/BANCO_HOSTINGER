@@ -1,8 +1,8 @@
+# app.py
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
-from mysql.connector import Error
-import os
+import os, re
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -11,101 +11,98 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Conexão com banco da Hostinger
+# ---------------- DB (Hostinger) ----------------
 config = {
     "host": os.getenv("DB_HOST"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_NAME")
+    "database": os.getenv("DB_NAME"),
 }
-pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=3, **config)
+pool = MySQLConnectionPool(pool_name="martier_pool", pool_size=4, **config)
 
 def _dict_conn_cursor():
     conn = pool.get_connection()
     cur  = conn.cursor(dictionary=True)
     return conn, cur
 
-@app.route('/')
+def _today_br_dateiso():
+    # simples: UTC-3
+    return (datetime.utcnow() - timedelta(hours=3)).date().isoformat()
+
+@app.route("/")
 def home():
-    return 'API conectada à Hostinger!'
+    return "API conectada à Hostinger!"
 
 # ========================= PRODUCAO ==========================
-
-@app.route('/producoes', methods=["GET"])
+@app.get("/producoes")
 def listar_producoes():
     try:
-        conn = pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
+        conn, cursor = _dict_conn_cursor()
         cursor.execute("SELECT * FROM producao")
-        dados = cursor.fetchall()
-        return jsonify(dados)
+        return jsonify(cursor.fetchall())
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
-@app.route('/producoes', methods=["POST"])
+@app.post("/producoes")
 def inserir_producao():
-    dados = request.get_json()
-    produto = dados.get("produto")
-    tamanho = dados.get("tamanho")
-    erp_id = dados.get("erp_id")
-    status = dados.get("status")
-    quantidade = dados.get("quantidade", 1)
-    origem = dados.get("origem")
-
+    dados = request.get_json() or {}
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
         brasilia_now = datetime.utcnow() - timedelta(hours=3)
-
         cursor.execute(
-            "INSERT INTO producao (produto, tamanho, erp_id, status, quantidade, origem, criado_em) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (produto, tamanho, erp_id, status, quantidade, origem, brasilia_now)
+            """
+            INSERT INTO producao (produto, tamanho, erp_id, status, quantidade, origem, criado_em)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                dados.get("produto"),
+                dados.get("tamanho"),
+                dados.get("erp_id"),
+                dados.get("status"),
+                dados.get("quantidade", 1),
+                dados.get("origem"),
+                brasilia_now,
+            ),
         )
         conn.commit()
         return jsonify({"mensagem": "Produção inserida com sucesso!"})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
-@app.route('/producoes/<int:id>', methods=["PUT"])
+@app.put("/producoes/<int:id>")
 def atualizar_producao(id):
+    dados = request.get_json() or {}
     try:
-        dados = request.get_json()
         conn = pool.get_connection()
         cursor = conn.cursor()
 
-        campos_sql = []
-        valores = []
-
+        campos_sql, valores = [], []
         novo_status = dados.get("status")
         if novo_status in ["on_demand", "fila", "construcao", "finalizado"]:
             campos_sql.append("status = %s")
             valores.append(novo_status)
-
-            colunas_data = {
+            colunas = {
                 "on_demand": "data_on_demand",
                 "fila": "data_fila",
                 "construcao": "data_construcao",
-                "finalizado": "data_finalizado"
+                "finalizado": "data_finalizado",
             }
-
-            coluna_data = colunas_data[novo_status]
-            campos_sql.append(f"{coluna_data} = %s")
+            campos_sql.append(f"{colunas[novo_status]} = %s")
             valores.append(datetime.utcnow() - timedelta(hours=3))
 
         if "quantidade" in dados:
             campos_sql.append("quantidade = %s")
             valores.append(dados["quantidade"])
-
         if "desativado" in dados:
             campos_sql.append("desativado = %s")
             valores.append(dados["desativado"])
-
         if "observacao" in dados:
             campos_sql.append("observacao = %s")
             valores.append(dados["observacao"])
@@ -115,99 +112,87 @@ def atualizar_producao(id):
 
         sql = f"UPDATE producao SET {', '.join(campos_sql)} WHERE id = %s"
         valores.append(id)
-
         cursor.execute(sql, valores)
         conn.commit()
         return jsonify({"mensagem": "Produção atualizada com sucesso"}), 200
-
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
-@app.route('/producoes/<int:id>', methods=["DELETE"])
+@app.delete("/producoes/<int:id>")
 def deletar_producao(id):
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
-
-        cursor.execute("SELECT id FROM producao WHERE id = %s", (id,))
+        cursor.execute("SELECT id FROM producao WHERE id=%s", (id,))
         if not cursor.fetchone():
             return jsonify({"erro": "Item não encontrado"}), 404
-
-        cursor.execute("DELETE FROM producao WHERE id = %s", (id,))
+        cursor.execute("DELETE FROM producao WHERE id=%s", (id,))
         conn.commit()
-
-        print(f"[DELETE] Produção ID {id} excluída.")
         return jsonify({"mensagem": "Produção excluída com sucesso"}), 200
-
     except Exception as e:
-        print(f"[ERRO DELETE] {str(e)}")
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
-@app.route('/importar-produtos', methods=["GET"])
+@app.get("/importar-produtos")
 def importar_produtos():
     try:
-        conn = pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT DISTINCT produto, tamanho, erp_id FROM producao WHERE produto IS NOT NULL AND tamanho IS NOT NULL AND erp_id IS NOT NULL")
-        dados = cursor.fetchall()
-        return jsonify(dados)
+        conn, cursor = _dict_conn_cursor()
+        cursor.execute("""
+            SELECT DISTINCT produto, tamanho, erp_id
+            FROM producao
+            WHERE produto IS NOT NULL AND tamanho IS NOT NULL AND erp_id IS NOT NULL
+        """)
+        return jsonify(cursor.fetchall())
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
 # ========================= MAPA DE CORES ==========================
-
-@app.route('/cores', methods=["GET"])
+@app.get("/cores")
 def listar_cores():
     try:
-        conn = pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
+        conn, cursor = _dict_conn_cursor()
         cursor.execute("SELECT palavra, grupo_cor FROM mapa_cores")
-        cores = cursor.fetchall()
-        return jsonify(cores)
+        return jsonify(cursor.fetchall())
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
-@app.route('/cores', methods=["POST"])
+@app.post("/cores")
 def inserir_cor():
-    dados = request.get_json()
-    palavra = dados.get("palavra", "").strip().lower()
-    grupo_cor = dados.get("grupo_cor", "").strip()
-
+    dados = request.get_json() or {}
+    palavra = (dados.get("palavra") or "").strip().lower()
+    grupo_cor = (dados.get("grupo_cor") or "").strip()
     if not palavra or not grupo_cor:
         return jsonify({"erro": "Campos obrigatórios: palavra e grupo_cor"}), 400
-
     try:
         conn = pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO mapa_cores (palavra, grupo_cor) VALUES (%s, %s)", (palavra, grupo_cor))
+        cursor.execute("INSERT INTO mapa_cores (palavra, grupo_cor) VALUES (%s,%s)", (palavra, grupo_cor))
         conn.commit()
         return jsonify({"mensagem": "Cor inserida com sucesso!"})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        try: cursor.close(); conn.close()
+        except: pass
 
 # ========================= COLETA (Protocolo) ==========================
-
-@app.route('/api/coleta', methods=['GET'])
+# LISTAGEM CRUD (já existia)
+@app.get("/api/coleta")
 def coleta_list():
-    d1 = request.args.get('from')
-    d2 = request.args.get('to')
-    include_deleted = request.args.get('include_deleted', '0') == '1'
-
+    d1 = request.args.get("from")
+    d2 = request.args.get("to")
+    include_deleted = request.args.get("include_deleted", "0") == "1"
     sql = "SELECT * FROM coleta_protocolos WHERE 1"
     params = []
     if not include_deleted:
@@ -219,7 +204,6 @@ def coleta_list():
     if not d1 and not d2:
         sql += " AND dateISO >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)"
     sql += " ORDER BY dateISO DESC, timeHHMMSS DESC, id DESC"
-
     try:
         conn, cur = _dict_conn_cursor()
         cur.execute(sql, params)
@@ -230,11 +214,10 @@ def coleta_list():
         try: cur.close(); conn.close()
         except: pass
 
-@app.route('/api/coleta', methods=['POST'])
+@app.post("/api/coleta")
 def coleta_upsert():
     payload = request.get_json(silent=True) or {}
     items = payload if isinstance(payload, list) else [payload]
-
     sql = """
         INSERT INTO coleta_protocolos
           (dateISO, timeHHMMSS, code, service, uf, peso, nf,
@@ -253,7 +236,6 @@ def coleta_upsert():
           active=1,
           deleted_at=NULL
     """
-
     to_exec = []
     for r in items:
         to_exec.append((
@@ -269,7 +251,6 @@ def coleta_upsert():
             r.get("pedido"),
             r.get("registradoPor"),
         ))
-
     try:
         conn = pool.get_connection()
         cur  = conn.cursor()
@@ -282,12 +263,15 @@ def coleta_upsert():
         try: cur.close(); conn.close()
         except: pass
 
-@app.route('/api/coleta/<int:item_id>', methods=['DELETE'])
+@app.delete("/api/coleta/<int:item_id>")
 def coleta_soft_delete(item_id):
     try:
         conn = pool.get_connection()
         cur  = conn.cursor()
-        cur.execute("UPDATE coleta_protocolos SET active=0, deleted_at=NOW() WHERE id=%s AND active=1", (item_id,))
+        cur.execute(
+          "UPDATE coleta_protocolos SET active=0, deleted_at=NOW() WHERE id=%s AND active=1",
+          (item_id,)
+        )
         conn.commit()
         return jsonify({"ok": True, "id": item_id})
     except Exception as e:
@@ -296,7 +280,7 @@ def coleta_soft_delete(item_id):
         try: cur.close(); conn.close()
         except: pass
 
-@app.route('/api/coleta/<int:item_id>/restore', methods=['POST'])
+@app.post("/api/coleta/<int:item_id>/restore")
 def coleta_restore(item_id):
     try:
         conn = pool.get_connection()
@@ -310,7 +294,8 @@ def coleta_restore(item_id):
         try: cur.close(); conn.close()
         except: pass
 
-@app.route('/api/coleta/func', methods=['GET'])
+# Funcionários
+@app.get("/api/coleta/func")
 def coleta_func_list():
     try:
         conn, cur = _dict_conn_cursor()
@@ -322,7 +307,7 @@ def coleta_func_list():
         try: cur.close(); conn.close()
         except: pass
 
-@app.route('/api/coleta/func', methods=['POST'])
+@app.post("/api/coleta/func")
 def coleta_func_upsert():
     data = request.get_json(silent=True) or {}
     nome = (data.get("nome") or "").strip()
@@ -344,114 +329,130 @@ def coleta_func_upsert():
         try: cur.close(); conn.close()
         except: pass
 
-# ===================== NOVAS ROTAS: PROTOCOLO DO DIA & HISTÓRICO =====================
+# -------- NOVAS ROTAS: protocolo (fechar dia + histórico) --------
+def _mk_protocolo_for_date(cur, date_iso: str) -> str:
+    """Gera PR-YYYYMMDD-### sequencial para a data."""
+    cur.execute("""
+        SELECT protocolo_num
+        FROM coleta_protocolos
+        WHERE dateISO=%s AND protocolo_num IS NOT NULL
+        ORDER BY printed_at DESC, protocolo_num DESC
+        LIMIT 1
+    """, (date_iso,))
+    last = cur.fetchone()
+    seq = 0
+    if last and last.get("protocolo_num"):
+        m = re.search(r"(\d{3})$", last["protocolo_num"])
+        if m: seq = int(m.group(1))
+    seq += 1
+    return f"PR-{date_iso.replace('-', '')}-{seq:03d}"
 
-@app.route('/api/coleta/fechar-dia', methods=['POST'])
+@app.post("/api/coleta/fechar-dia")
 def coleta_fechar_dia():
     """
-    Fecha o dia: marca todos os registros ativos (dateISO = {date}) que ainda
-    não têm protocolo, grava protocolo_num/printed_at/printed_by e retorna
-    a lista desses itens para impressão.
-    Body JSON: { "date": "YYYY-MM-DD", "printed_by": "Fulano" }
+    Fecha o dia atual (ou date enviado) e marca todos os registros
+    ativos daquela data que ainda NÃO possuem protocolo.
+    Body JSON: { "date": "YYYY-MM-DD", "printed_by": "nome" }
     """
-    data = request.get_json(silent=True) or {}
-    date_str = (data.get('date') or '').strip() or datetime.utcnow().date().isoformat()
-    printed_by = (data.get('printed_by') or '').strip()
+    body = request.get_json(silent=True) or {}
+    date_iso = (body.get("date") or _today_br_dateiso()).strip()
+    printed_by = (body.get("printed_by") or "").strip() or None
 
     try:
         conn = pool.get_connection()
         cur  = conn.cursor(dictionary=True)
 
-        # Candidatos do dia (ativos e ainda sem protocolo)
+        # há itens de hoje sem protocolo?
         cur.execute("""
-            SELECT * FROM coleta_protocolos
-             WHERE active=1 AND dateISO=%s AND protocolo_num IS NULL
-             ORDER BY timeHHMMSS, id
-        """, (date_str,))
-        rows = cur.fetchall()
-        if not rows:
-            return jsonify({"ok": True, "protocolo": None, "count": 0, "rows": []})
+           SELECT id FROM coleta_protocolos
+           WHERE active=1 AND dateISO=%s AND (protocolo_num IS NULL OR protocolo_num='')
+           LIMIT 1
+        """, (date_iso,))
+        if not cur.fetchone():
+            return jsonify({"ok": True, "count": 0, "rows": []})
 
-        # Número do protocolo: AAAAMMDD-HHMMSS (UTC)
-        proto = f"{date_str.replace('-','')}-{datetime.utcnow().strftime('%H%M%S')}"
+        protocolo = _mk_protocolo_for_date(cur, date_iso)
 
-        # Marca em lote
-        cur.execute("""
+        # aplica protocolo
+        cur2 = conn.cursor()
+        cur2.execute("""
             UPDATE coleta_protocolos
-               SET protocolo_num=%s,
-                   printed_at=NOW(),
-                   printed_by=%s
-             WHERE active=1 AND dateISO=%s AND protocolo_num IS NULL
-        """, (proto, printed_by, date_str))
+            SET protocolo_num=%s, printed_at=NOW(), printed_by=%s
+            WHERE active=1 AND dateISO=%s AND (protocolo_num IS NULL OR protocolo_num='')
+        """, (protocolo, printed_by, date_iso))
         conn.commit()
+        cur2.close()
 
-        # Retorna os itens marcados
+        # retorna itens do protocolo para impressão
         cur.execute("""
-            SELECT * FROM coleta_protocolos
-             WHERE protocolo_num=%s
-             ORDER BY timeHHMMSS, id
-        """, (proto,))
-        out = cur.fetchall()
-        return jsonify({"ok": True, "protocolo": proto, "count": len(out), "rows": out})
+            SELECT code, pedido
+            FROM coleta_protocolos
+            WHERE dateISO=%s AND protocolo_num=%s
+            ORDER BY id
+        """, (date_iso, protocolo))
+        items = cur.fetchall()
 
+        return jsonify({
+            "ok": True,
+            "protocolo": protocolo,
+            "date": date_iso,
+            "count": len(items),
+            "rows": items
+        })
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
         try: cur.close(); conn.close()
         except: pass
 
-
-@app.route('/api/coleta/protocolos', methods=['GET'])
-def coleta_protocolos():
+@app.get("/api/coleta/historico")
+def coleta_historico():
     """
-    Lista protocolos gerados com agregados.
-    Params: from=YYYY-MM-DD, to=YYYY-MM-DD (opcionais)
+    Lista protocolos fechados no período.
+    Query: from, to (YYYY-MM-DD). Defaults: últimos 30 dias.
     """
-    d1 = request.args.get('from')
-    d2 = request.args.get('to')
-
-    sql = """
-      SELECT protocolo_num,
-             MIN(dateISO)      AS dateISO,
-             MIN(printed_at)   AS printed_at,
-             COALESCE(MAX(printed_by),'') AS printed_by,
-             COUNT(*)          AS qtd,
-             SUM(COALESCE(valorCliente,0))  AS total_cliente,
-             SUM(COALESCE(valorCorreios,0)) AS total_correios
-        FROM coleta_protocolos
-       WHERE protocolo_num IS NOT NULL
-    """
-    params = []
-    if d1:
-        sql += " AND dateISO >= %s"; params.append(d1)
-    if d2:
-        sql += " AND dateISO <= %s"; params.append(d2)
-    sql += " GROUP BY protocolo_num ORDER BY printed_at DESC"
-
+    to  = request.args.get("to") or _today_br_dateiso()
+    frm = request.args.get("from") or (datetime.fromisoformat(to) - timedelta(days=30)).date().isoformat()
     try:
-        conn = pool.get_connection()
-        cur  = conn.cursor(dictionary=True)
-        cur.execute(sql, params)
-        return jsonify({"ok": True, "rows": cur.fetchall()})
+        conn, cur = _dict_conn_cursor()
+        cur.execute("""
+            SELECT
+              protocolo_num AS protocolo,
+              MIN(printed_at) AS printed_at,
+              COALESCE(MAX(printed_by),'') AS printed_by,
+              COUNT(*) AS qtd,
+              COALESCE(SUM(valorCliente),0) AS pago_cliente,
+              COALESCE(SUM(valorCorreios),0) AS pago_correios
+            FROM coleta_protocolos
+            WHERE protocolo_num IS NOT NULL
+              AND printed_at IS NOT NULL
+              AND dateISO BETWEEN %s AND %s
+            GROUP BY protocolo_num
+            ORDER BY printed_at DESC
+        """, (frm, to))
+        rows = cur.fetchall()
+        for r in rows:
+            r["lucro"] = float(r["pago_cliente"] or 0) - float(r["pago_correios"] or 0)
+        return jsonify({"ok": True, "from": frm, "to": to, "rows": rows})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
         try: cur.close(); conn.close()
         except: pass
 
-
-@app.route('/api/coleta/protocolo/<proto>', methods=['GET'])
-def coleta_protocolo_itens(proto):
-    """Retorna todos os itens de um protocolo específico."""
+@app.get("/api/coleta/protocolo/<protocolo>")
+def coleta_protocolo_itens(protocolo):
+    """Itens de um protocolo para reimpressão/consulta."""
     try:
-        conn = pool.get_connection()
-        cur  = conn.cursor(dictionary=True)
+        conn, cur = _dict_conn_cursor()
         cur.execute("""
-            SELECT * FROM coleta_protocolos
-             WHERE protocolo_num=%s
-             ORDER BY timeHHMMSS, id
-        """, (proto,))
-        return jsonify({"ok": True, "rows": cur.fetchall()})
+            SELECT code, pedido, valorCliente, valorCorreios
+            FROM coleta_protocolos
+            WHERE protocolo_num=%s
+            ORDER BY id
+        """, (protocolo,))
+        items = cur.fetchall()
+        return jsonify({"ok": True, "rows": items})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
@@ -459,6 +460,5 @@ def coleta_protocolo_itens(proto):
         except: pass
 
 # ================================================================
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
