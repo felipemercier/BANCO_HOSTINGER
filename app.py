@@ -344,6 +344,120 @@ def coleta_func_upsert():
         try: cur.close(); conn.close()
         except: pass
 
+# ===================== NOVAS ROTAS: PROTOCOLO DO DIA & HISTÓRICO =====================
+
+@app.route('/api/coleta/fechar-dia', methods=['POST'])
+def coleta_fechar_dia():
+    """
+    Fecha o dia: marca todos os registros ativos (dateISO = {date}) que ainda
+    não têm protocolo, grava protocolo_num/printed_at/printed_by e retorna
+    a lista desses itens para impressão.
+    Body JSON: { "date": "YYYY-MM-DD", "printed_by": "Fulano" }
+    """
+    data = request.get_json(silent=True) or {}
+    date_str = (data.get('date') or '').strip() or datetime.utcnow().date().isoformat()
+    printed_by = (data.get('printed_by') or '').strip()
+
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor(dictionary=True)
+
+        # Candidatos do dia (ativos e ainda sem protocolo)
+        cur.execute("""
+            SELECT * FROM coleta_protocolos
+             WHERE active=1 AND dateISO=%s AND protocolo_num IS NULL
+             ORDER BY timeHHMMSS, id
+        """, (date_str,))
+        rows = cur.fetchall()
+        if not rows:
+            return jsonify({"ok": True, "protocolo": None, "count": 0, "rows": []})
+
+        # Número do protocolo: AAAAMMDD-HHMMSS (UTC)
+        proto = f"{date_str.replace('-','')}-{datetime.utcnow().strftime('%H%M%S')}"
+
+        # Marca em lote
+        cur.execute("""
+            UPDATE coleta_protocolos
+               SET protocolo_num=%s,
+                   printed_at=NOW(),
+                   printed_by=%s
+             WHERE active=1 AND dateISO=%s AND protocolo_num IS NULL
+        """, (proto, printed_by, date_str))
+        conn.commit()
+
+        # Retorna os itens marcados
+        cur.execute("""
+            SELECT * FROM coleta_protocolos
+             WHERE protocolo_num=%s
+             ORDER BY timeHHMMSS, id
+        """, (proto,))
+        out = cur.fetchall()
+        return jsonify({"ok": True, "protocolo": proto, "count": len(out), "rows": out})
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+
+@app.route('/api/coleta/protocolos', methods=['GET'])
+def coleta_protocolos():
+    """
+    Lista protocolos gerados com agregados.
+    Params: from=YYYY-MM-DD, to=YYYY-MM-DD (opcionais)
+    """
+    d1 = request.args.get('from')
+    d2 = request.args.get('to')
+
+    sql = """
+      SELECT protocolo_num,
+             MIN(dateISO)      AS dateISO,
+             MIN(printed_at)   AS printed_at,
+             COALESCE(MAX(printed_by),'') AS printed_by,
+             COUNT(*)          AS qtd,
+             SUM(COALESCE(valorCliente,0))  AS total_cliente,
+             SUM(COALESCE(valorCorreios,0)) AS total_correios
+        FROM coleta_protocolos
+       WHERE protocolo_num IS NOT NULL
+    """
+    params = []
+    if d1:
+        sql += " AND dateISO >= %s"; params.append(d1)
+    if d2:
+        sql += " AND dateISO <= %s"; params.append(d2)
+    sql += " GROUP BY protocolo_num ORDER BY printed_at DESC"
+
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute(sql, params)
+        return jsonify({"ok": True, "rows": cur.fetchall()})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+
+@app.route('/api/coleta/protocolo/<proto>', methods=['GET'])
+def coleta_protocolo_itens(proto):
+    """Retorna todos os itens de um protocolo específico."""
+    try:
+        conn = pool.get_connection()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT * FROM coleta_protocolos
+             WHERE protocolo_num=%s
+             ORDER BY timeHHMMSS, id
+        """, (proto,))
+        return jsonify({"ok": True, "rows": cur.fetchall()})
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
 # ================================================================
 
 if __name__ == '__main__':
