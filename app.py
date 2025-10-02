@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector.pooling import MySQLConnectionPool
@@ -28,6 +29,27 @@ def _dict_conn_cursor():
 def _today_br_dateiso():
     # Data de hoje no fuso de Brasília (UTC-3)
     return (datetime.utcnow() - timedelta(hours=3)).date().isoformat()
+
+def _now_br_time():
+    d = datetime.utcnow() - timedelta(hours=3)
+    return d.strftime("%H:%M:%S")
+
+def _to_float(v):
+    if v is None: return None
+    try:
+        if isinstance(v, str):
+            s = v.strip().replace('.', '').replace(',', '.')
+            if s == '': return None
+            return float(s)
+        return float(v)
+    except Exception:
+        return None
+
+def _only_digits(s):
+    if s is None: return None
+    s = str(s)
+    m = re.findall(r'\d+', s)
+    return ''.join(m) if m else None
 
 @app.route('/')
 def home():
@@ -188,7 +210,7 @@ def inserir_cor():
     palavra = dados.get("palavra", "").strip().lower()
     grupo_cor = dados.get("grupo_cor", "").strip()
 
-    if not palavra ou not grupo_cor:
+    if not palavra or not grupo_cor:
         return jsonify({"erro": "Campos obrigatórios: palavra e grupo_cor"}), 400
 
     try:
@@ -233,112 +255,74 @@ def coleta_list():
         try: cur.close(); conn.close()
         except: pass
 
-# --------- NOVO: upsert idempotente (UPDATE->INSERT) ----------
 @app.route('/api/coleta', methods=['POST'])
 def coleta_upsert():
     """
-    Upsert idempotente sem depender de índice UNIQUE.
-    1) Tenta UPDATE onde (active=1 AND code=:code AND dateISO=:dateISO)
-    2) Se não atualizou nada, faz INSERT.
-
-    Aceita 1 item ou lista de itens. Campos esperados:
-      dateISO, time|timeHHMMSS, code, service, uf, peso, nf,
-      valorCorreios, valorCliente, pedido, registradoPor
+    Upsert por (code, dateISO, active). Nunca sobrescreve valor existente com NULL/''.
     """
-    body = request.get_json(silent=True) or {}
-    items = body if isinstance(body, list) else [body]
+    payload = request.get_json(silent=True) or {}
+    items = payload if isinstance(payload, list) else [payload]
 
-    # normaliza/garante chaves mínimas
-    def norm_it(r):
-        dateISO = (r.get("dateISO") or _today_br_dateiso()).strip()
-        timeHH  = (r.get("time") or r.get("timeHHMMSS") or datetime.utcnow().strftime("%H:%M:%S")).strip()
-        code    = (r.get("code") or "").strip().upper()
+    sql = """
+        INSERT INTO coleta_protocolos
+          (dateISO, timeHHMMSS, code, service, uf, peso, nf,
+           valorCorreios, valorCliente, pedido, registradoPor, active, updated_at)
+        VALUES
+          (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1, NOW())
+        ON DUPLICATE KEY UPDATE
+          service       = COALESCE(VALUES(service),       service),
+          uf            = COALESCE(VALUES(uf),            uf),
+          peso          = COALESCE(VALUES(peso),          peso),
+          nf            = COALESCE(VALUES(nf),            nf),
+          valorCorreios = COALESCE(VALUES(valorCorreios), valorCorreios),
+          valorCliente  = COALESCE(VALUES(valorCliente),  valorCliente),
+          pedido        = COALESCE(VALUES(pedido),        pedido),
+          registradoPor = COALESCE(VALUES(registradoPor), registradoPor),
+          timeHHMMSS    = COALESCE(VALUES(timeHHMMSS),    timeHHMMSS),
+          active=1,
+          deleted_at=NULL,
+          updated_at=NOW()
+    """
+
+    to_exec = []
+    for r in items:
+        date_iso = (r.get("dateISO") or _today_br_dateiso()).strip()
+        time_hms = (r.get("time") or r.get("timeHHMMSS") or _now_br_time()).strip()
+        code     = (r.get("code") or "").strip().upper()
+
         if not code:
-            return None  # ignora itens sem código
+            # ignora itens sem código
+            continue
 
-        return {
-            "dateISO":        dateISO,
-            "timeHHMMSS":     timeHH,
-            "code":           code,
-            "service":        r.get("service"),
-            "uf":             r.get("uf"),
-            "peso":           r.get("peso"),
-            "nf":             r.get("nf"),
-            "valorCorreios":  r.get("valorCorreios"),
-            "valorCliente":   r.get("valorCliente"),
-            "pedido":         r.get("pedido"),
-            "registradoPor":  r.get("registradoPor")
-        }
+        service  = (r.get("service") or None)
+        uf       = (r.get("uf") or None)
+        peso     = (r.get("peso") or None)
+        nf       = (r.get("nf") or None)
 
-    norm_items = [x for x in (norm_it(r) for r in items) if x]
+        v_cor    = _to_float(r.get("valorCorreios"))
+        v_cli    = _to_float(r.get("valorCliente"))
+        pedido   = _only_digits(r.get("pedido"))
+        registradoPor = (r.get("registradoPor") or None)
 
-    if not norm_items:
-        return jsonify({"ok": False, "count": 0, "msg": "payload vazio"}), 400
+        to_exec.append((
+            date_iso, time_hms, code, service, uf, peso, nf,
+            v_cor, v_cli, pedido, registradoPor
+        ))
+
+    if not to_exec:
+        return jsonify({"ok": True, "count": 0})
 
     try:
         conn = pool.get_connection()
         cur  = conn.cursor()
-
-        # 1) UPDATE primeiro
-        upd_sql = """
-            UPDATE coleta_protocolos
-               SET service=%s, uf=%s, peso=%s, nf=%s,
-                   valorCorreios=%s, valorCliente=%s,
-                   pedido=%s, registradoPor=%s
-             WHERE active=1 AND code=%s AND dateISO=%s
-        """
-
-        updated_count = 0
-        to_insert = []
-
-        for r in norm_items:
-            cur.execute(
-                upd_sql,
-                (
-                    r["service"], r["uf"], r["peso"], r["nf"],
-                    r["valorCorreios"], r["valorCliente"],
-                    r["pedido"], r["registradoPor"],
-                    r["code"], r["dateISO"]
-                )
-            )
-            if cur.rowcount and cur.rowcount > 0:
-                updated_count += cur.rowcount
-            else:
-                to_insert.append(r)
-
-        # 2) INSERT para os que não existiam
-        inserted_count = 0
-        if to_insert:
-            ins_sql = """
-                INSERT INTO coleta_protocolos
-                    (dateISO, timeHHMMSS, code, service, uf, peso, nf,
-                     valorCorreios, valorCliente, pedido, registradoPor, active)
-                VALUES
-                    (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
-            """
-            cur.executemany(
-                ins_sql,
-                [
-                    (
-                        r["dateISO"], r["timeHHMMSS"], r["code"], r["service"],
-                        r["uf"], r["peso"], r["nf"],
-                        r["valorCorreios"], r["valorCliente"], r["pedido"], r["registradoPor"]
-                    )
-                    for r in to_insert
-                ]
-            )
-            inserted_count = cur.rowcount or 0
-
+        cur.executemany(sql, to_exec)
         conn.commit()
-        return jsonify({"ok": True, "updated": updated_count, "inserted": inserted_count, "count": updated_count + inserted_count}), 200
-
+        return jsonify({"ok": True, "count": cur.rowcount})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     finally:
-        try:
-            cur.close(); conn.close()
-        except:
-            pass
+        try: cur.close(); conn.close()
+        except: pass
 
 @app.route('/api/coleta/<int:item_id>', methods=['DELETE'])
 def coleta_soft_delete(item_id):
@@ -388,59 +372,6 @@ def coleta_restore(item_id):
     finally:
         try: cur.close(); conn.close()
         except: pass
-
-@app.route('/api/coleta/func', methods=['GET'])
-def coleta_func_list():
-    try:
-        conn, cur = _dict_conn_cursor()
-        cur.execute("SELECT * FROM coleta_funcionarios ORDER BY nome")
-        return jsonify({"rows": cur.fetchall()})
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
-
-@app.route('/api/coleta/func', methods=['POST'])
-def coleta_func_upsert():
-    data = request.get_json(silent=True) or {}
-    nome = (data.get("nome") or "").strip()
-    is_default = 1 if data.get("is_default") else 0
-    if not nome:
-        return jsonify({"erro": "nome é obrigatório"}), 400
-    try:
-        conn = pool.get_connection()
-        cur  = conn.cursor()
-        cur.execute("INSERT IGNORE INTO coleta_funcionarios (nome) VALUES (%s)", (nome,))
-        if is_default:
-            cur.execute("UPDATE coleta_funcionarios SET is_default=0")
-            cur.execute("UPDATE coleta_funcionarios SET is_default=1 WHERE nome=%s", (nome,))
-        conn.commit()
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
-
-# ========================= PROTOCOLO (fechar dia + histórico) ==========================
-
-def _mk_protocolo_for_date(cur, date_iso: str) -> str:
-    """Gera PR-YYYYMMDD-### sequencial para a data."""
-    cur.execute("""
-        SELECT protocolo_num
-        FROM coleta_protocolos
-        WHERE dateISO=%s AND protocolo_num IS NOT NULL
-        ORDER BY printed_at DESC, protocolo_num DESC
-        LIMIT 1
-    """, (date_iso,))
-    last = cur.fetchone()
-    seq = 0
-    if last and last.get("protocolo_num"):
-        m = re.search(r"(\d{3})$", last["protocolo_num"])
-        if m: seq = int(m.group(1))
-    seq += 1
-    return f"PR-{date_iso.replace('-', '')}-{seq:03d}"
 
 @app.post("/api/coleta/fechar-dia")
 def coleta_fechar_dia():
@@ -500,6 +431,23 @@ def coleta_fechar_dia():
     finally:
         try: cur.close(); conn.close()
         except: pass
+
+def _mk_protocolo_for_date(cur, date_iso: str) -> str:
+    """Gera PR-YYYYMMDD-### sequencial para a data."""
+    cur.execute("""
+        SELECT protocolo_num
+        FROM coleta_protocolos
+        WHERE dateISO=%s AND protocolo_num IS NOT NULL
+        ORDER BY printed_at DESC, protocolo_num DESC
+        LIMIT 1
+    """, (date_iso,))
+    last = cur.fetchone()
+    seq = 0
+    if last and last.get("protocolo_num"):
+        m = re.search(r"(\d{3})$", last["protocolo_num"])
+        if m: seq = int(m.group(1))
+    seq += 1
+    return f"PR-{date_iso.replace('-', '')}-{seq:03d}"
 
 @app.get("/api/coleta/historico")
 def coleta_historico():
